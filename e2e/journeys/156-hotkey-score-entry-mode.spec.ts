@@ -41,8 +41,14 @@ const recorded = (page: Page, matchUpId: string) =>
   }, matchUpId);
 
 const TOAST = '.notification';
-const CLEAR_REFUSED = "This result can't be cleared: a later match depends on it.";
+// the score entry dialog's own words for the empty card it will not submit (courthive-components default)
+const REPLACEMENT_REQUIRED = 'Enter a replacement score: a later match depends on this result.';
+const DIALOG_CANCEL = 'button[data-action="cancel"]';
+const DIALOG_SUBMIT = 'button[data-action="submit"]';
+const DIALOG_CLEAR = 'button[data-action="clear"]';
 const ENGINE_REFUSAL = 'No valid actions';
+// TMX's own reason for a clear it stops (toasts.clearRefused)
+const CLEAR_REFUSED = "This result can't be cleared: a later match depends on it.";
 
 type Scoring = { round: number; position: number; status: string; sets: number[][]; winningSide?: number };
 
@@ -202,7 +208,7 @@ test.describe('journey 156 — hotkey score entry mode', () => {
     expect((await recorded(page, inProgressId.r1p1)).score ?? '').toBe('');
   });
 
-  test('a clear a later match depends on is stopped with the reason; one nothing depends on goes through', async ({
+  test('a final result opens the score dialog, where a clear a later match depends on cannot be submitted', async ({
     page,
   }) => {
     const tournamentId = await seedTournament(page, {
@@ -247,18 +253,64 @@ test.describe('journey 156 — hotkey score entry mode', () => {
     await openMatchUps(page, tournamentId);
     await page.locator(TOGGLE).click();
 
-    // a semifinal whose winner has played the final: the clear is refused before it is sent
+    // A final result is corrected in the score dialog even in hotkey mode (#1697): the keypad is for
+    // unfinished scores. A semifinal whose winner has played the final: [Clear] resets the form, but the
+    // empty card cannot be submitted, so the clear is never sent.
     await scoreCellWithText(page, '6-1 6-1').click();
-    for (let key = 0; key < 4; key += 1) await page.keyboard.press('Backspace');
-    await page.keyboard.press('Enter');
-    await expect(page.locator(TOAST).filter({ hasText: CLEAR_REFUSED })).toBeVisible();
+    await expect(page.locator(DIALOG_CLEAR)).toBeEnabled();
+    await page.locator(DIALOG_CLEAR).click();
+    await expect(page.locator(DIALOG_SUBMIT)).toBeDisabled();
+    await expect(page.locator(DIALOG_SUBMIT)).toHaveAttribute('title', REPLACEMENT_REQUIRED);
+    await page.locator(DIALOG_CANCEL).click();
+    await expect(page.locator(DIALOG_SUBMIT)).toHaveCount(0);
     await expect(page.locator(TOAST).filter({ hasText: ENGINE_REFUSAL })).toHaveCount(0);
     expect(await recorded(page, ids.r1p1)).toEqual({ status: 'COMPLETED', score: '6-1 6-1' });
 
     // the final: nothing depends on it, so it clears
     await scoreCellWithText(page, '6-2 6-2').click();
-    for (let key = 0; key < 4; key += 1) await page.keyboard.press('Backspace');
-    await page.keyboard.press('Enter');
+    await page.locator(DIALOG_CLEAR).click();
+    await page.locator(DIALOG_SUBMIT).click();
     await expect.poll(async () => (await recorded(page, ids.r2p1)).status).toBe('TO_BE_PLAYED');
+  });
+
+  test('a double walkover a later match depends on stays on the keypad, and its clear is stopped with the reason', async ({
+    page,
+  }) => {
+    const tournamentId = await seedTournament(page, {
+      tournamentName: 'E2E Hotkey Double Exit',
+      tournamentAttributes: { tournamentId: 'e2e-hotkey-double-exit' },
+      participantsProfile: { scaledParticipantsCount: 8 },
+      drawProfiles: [{ eventName: 'Tennis', drawType: 'SINGLE_ELIMINATION', drawSize: 8 }],
+    });
+    const won = {
+      status: 'COMPLETED',
+      sets: [
+        [6, 1, 1],
+        [6, 1, 1],
+      ],
+      winningSide: 1,
+    };
+    // R1 #1 is a double walkover: no winner, so it is not a final result and keeps its entry field, yet it produces
+    // the walkover in R2 #1, whose opponent then plays the final. Clearing it would rewrite a decided path.
+    const ids = await scoreBeforeRender(page, [
+      { round: 1, position: 1, status: 'DOUBLE_WALKOVER', sets: [] },
+      { round: 1, position: 2, ...won },
+      { round: 1, position: 3, ...won },
+      { round: 1, position: 4, ...won },
+      { round: 2, position: 2, ...won },
+      { round: 3, position: 1, ...won },
+    ]);
+
+    await openMatchUps(page, tournamentId);
+    await page.locator(TOGGLE).click();
+    const field = page.locator(`${FIELD}[data-match-up-id="${ids.r1p1}"]`);
+    await expect(field).toHaveCount(1);
+    await field.focus();
+    for (let i = 0; i < 6; i++) await page.keyboard.press('Backspace');
+    await page.keyboard.press('Enter');
+
+    await expect(page.locator(TOAST).filter({ hasText: CLEAR_REFUSED })).toBeVisible();
+    await expect(page.locator(TOAST).filter({ hasText: ENGINE_REFUSAL })).toHaveCount(0);
+    expect((await recorded(page, ids.r1p1)).status).toBe('DOUBLE_WALKOVER');
   });
 });
