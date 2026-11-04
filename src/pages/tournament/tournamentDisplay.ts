@@ -8,12 +8,14 @@ import { renderOfficialsTab, destroyOfficialsTab } from 'pages/tournament/tabs/o
 import { renderRegistrationsTab } from 'pages/tournament/tabs/registrationsTab/renderRegistrationsTab';
 import { notifyTournamentContextChanged } from 'services/tournament/tournamentContextObservers';
 import { renderPublishingTab } from 'pages/tournament/tabs/publishingTab/renderPublishingTab';
+import { clearAssignmentRole, loadAssignmentRole } from 'services/capability/assignmentRole';
 import { formatParticipantTab } from 'pages/tournament/tabs/participantTab/participantsTab';
 import { runActiveScaleAutoSwitch } from 'services/activeScale/runActiveScaleAutoSwitch';
 import { renderSettingsTab } from 'pages/tournament/tabs/settingsTab/renderSettingsTab';
 import { renderReportsTab } from 'pages/tournament/tabs/reportsTab/renderReportsTab';
 import { resetScheduledCatalogFilters } from './tabs/scheduleViews/gridViewStorage';
 import { renderMatchUpTab } from 'pages/tournament/tabs/matchUpsTab/matchUpsTab';
+import { chatOnAms, enterChat, leaveChat } from 'services/chat/amsChatTransport';
 import { requestTournament, removeTournament } from 'services/apis/servicesApi';
 import { tournamentHeader } from '../../components/popovers/tournamentHeader';
 import { serverIsAhead, setServerSync } from 'services/staleness/serverSync';
@@ -98,6 +100,7 @@ export function displayTournament({ config }: { config?: any } = {}): void {
     slog('[tournament] switching from %s to %s (loggedIn=%s)', prevId, config.tournamentId, !!getLoginState());
     context.ee.emit(LEAVE_TOURNAMENT, prevId);
     if (prevId && getLoginState()) leaveTournamentRoom(prevId);
+    if (chatOnAms()) leaveChat();
     disconnectRelay();
     stopTournamentCrowdPoller();
     clearActiveLiveTrackedScores();
@@ -132,6 +135,7 @@ export function renderTournament({ config }: { config: any }): void {
   if (config.tournamentId && getLoginState()) {
     slog('[tournament] renderTournament — joining room for', config.tournamentId);
     joinTournamentRoom(config.tournamentId);
+    if (chatOnAms()) enterChat(config.tournamentId);
   } else {
     slog(
       '[tournament] renderTournament — skipping room join (tournamentId=%s, loggedIn=%s)',
@@ -335,6 +339,7 @@ export function loadTournament({
       Promise.all([
         requestTournament({ tournamentId: config.tournamentId, silent: true }),
         loadCallerGrants(config.tournamentId, isCurrent),
+        loadAssignmentRole(config.tournamentId, isCurrent),
       ]).then(([result]) => showResult(result), tryLocal);
     }
   } else {
@@ -348,6 +353,7 @@ export function loadTournament({
     // No server to ask, so no grants — but the mask is a singleton and the
     // previous tournament's would otherwise survive the navigation.
     clearCallerGrants();
+    clearAssignmentRole();
     tournamentEngine.setState(tournamentRecord);
     markTournamentRecordInstalled();
     notifyMutationApplied();
